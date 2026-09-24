@@ -1,0 +1,101 @@
+pluto_infer.exe IPC-side notes (fork analysis). main = FUN_1401501f0 (@0x1401501f0, 10263 B).
+V = verified from decomp+disasm; I = inference.
+
+STARTUP / ARGS
+V CPU check first: cpu-feature word (PTR_DAT_140162610+0xc) & 0x4400 (AVX2|FMA) else prints
+  "[pluto_infer] this CPU lacks AVX2/FMA ..." and returns 1 (0x14015028d..0x1401502b3; main returns r13d).
+V FUN_140083c10: unless BWRL_KEEP_AFFINITY set, SetProcessAffinityMask(self, system mask) when inherited
+  process mask != system mask (StarCraft may be pinned); logs "[engine] affinity expanded %u -> %u cpus".
+V Default blob = <dir from FUN_14008fc50 (exe dir, I)> + "pluto_weights.bin".
+V Flags (strcmp chain): --blob P, --backend {pk|int8|int8mv}, --threads N, --bench, --seed U64 (_strtoui64 base 0),
+  --argmax, --log FILE (freopen(stderr,"w")), --verbose (per-step log), --ptx X (ignored, GPU-era leftover),
+  --prof N, --prof-secs S (default 180.0 @0x140159278), --prof-gap MS, --prof-ready FILE, --prof-action move|rclick.
+  Unknown arg -> "[pluto_infer] unknown arg %s", exit 2 (0x140150655). Bad backend -> exit 2. --log fopen fail -> exit 2.
+V --bench -> FUN_1400032e0(blob, backend, threads) : sweeps threads, writes pluto_config.json
+  {"backend","threads","model_version","model_label","vnni","hw_threads","bench":[{backend,threads,n200_critical_ms,
+   n200_prelude_ms,n768_critical_ms,rss_mb}]}.
+V pluto_config.json read from blob's parent dir (FUN_14008d4b0(parent)+"pluto_config.json"), keys "backend","threads";
+  logs "[pluto_infer] config %s: backend=%s threads=%d"; malformed -> "ignoring malformed %s: %s" (landing pad 0x140152b01), continue.
+V Backend precedence: --backend > config > env: BWRL_INT8=0 -> "pk"; else BWRL_INT8_MATVEC=0 -> "int8"; else "int8mv".
+  int8 blob forces int8mv ("model: int8 blob carries s8 weights only ...").
+V Threads: --threads if >0, else config threads; FUN_140080770(n): if n<0 read BWRL_ENGINE_THREADS; fallback
+  min(6, popcount(process affinity)). (exact env-vs-default branch order partly I.)
+V VNNI: FUN_140083cf0: CPUID.7.0:EAX bit4 (AVX-VNNI) unless BWRL_NO_VNNI nonzero.
+V RNG: MT19937-64 (mult 0x5851f42d4c957f2d, n=312). Seed: --seed, else std::random_device("default") 32-bit.
+  --argmax => greedy.
+V Weights container: 'PLWB' u32 ver=1, u64 json_len, JSON header (label, frames_per_step=6, model_config.max_units=768,
+  c_unit=109, source_weight_version=2578600, tensors...).
+V Ready log: "[pluto_infer] ready: cpu backend %s%s, %d thread%s, model %s (step %ld), frames_per_step %d, max_units %d, seed 0x%llx%s".
+V Exceptions during init: catch std::exception -> "[pluto_infer] init failed: %s" (what()), exit 1 (0x140152bca..0x140152bdb).
+  "engine: check failed: %s" is an internal assert helper (decomp line 3646).
+
+CAP CHECK
+V model max_units (cfg+0x1160, 768) > 0x400 -> "model max_units %d exceeds protocol cap %d (kShmMaxUnits); refusing to serve",
+  exit 1 (0x1401527c2). kShmMaxUnits = 1024.
+
+SHM ATTACH (0x140151c02..0x14015281a)
+V FUN_140001480(name) = getenv -> _strtoui64(base 10) (0 if missing).
+V Needs all four of PLUTO_SHM_SEC (mapping), PLUTO_SHM_REQ_EV, PLUTO_SHM_RESP_EV, PLUTO_SHM_PARENT nonzero, else pipes silently.
+V MapViewOfFile(sec, FILE_MAP_ALL_ACCESS 0xf001f, 0,0,0). Fail -> "shm map failed (error %lu); using pipes".
+V Validates u32[0]=0x4d534c50 'PLSM', [1]=3, [2]=0x85f80, [3]=0x400; mismatch -> "shm header mismatch (magic..version..size..mu..;
+  built for %lu/%lu); using pipes", UnmapViewOfFile.
+V On match: writes u32 +0x10 = 'PLSM' (ack) BEFORE sending handshake; logs "transport: shared memory + events" after handshake.
+
+HANDSHAKE (built on stack, written with FUN_1400014f0 = fwrite(stdout)+fflush, 0x88 bytes, always via stdout)
+V +0x00 u64 0x00000003_314f4c50 ('PLO1', version 3)   (DAT_140159298)
+V +0x08 i32 frames_per_step (cfg+0x1198 area; 6)
+V +0x0c i32 max_units (cfg+0x1160; 768)
+V +0x10 i64 model step (source_weight_version, sign-extended int)
+V +0x18 char[0x30] snprintf("%s", label)  e.g. "md07x02_cog2026_2578600_int8mv"
+V +0x48 char[0x40] snprintf("%s%s %dt%s %s", backend, fp32?"(fp32)":"", threads, vnni?" vnni":"", "Aug 17 2026")
+     e.g. "int8mv 6t vnni Aug 17 2026". "(fp32)" when no packed-GEMM path.
+  Rest zero (0x1c dwords zeroed). Write failure -> exit 1.
+
+SHM LAYOUT (byte offsets; total 0x85f80)
+ 0x000 u32 magic 'PLSM'  (DLL)
+ 0x004 u32 version 3     (DLL)
+ 0x008 u32 size 0x85f80  (DLL)
+ 0x00c u32 max_units cap 0x400 (DLL)
+ 0x010 u32 ack 'PLSM'    (infer writes)
+ 0x014 u32 quit flag     (DLL sets 1 at shutdown; infer checks every wake -> "quit flag set" -> clean exit 0)
+ 0x040 u32 req_seq       (DLL increments; infer compares with last served)
+ 0x080 u32 resp_seq      (infer writes = req_seq served, then SetEvent(resp_ev))
+ 0x0c0 request header, 0x30 bytes:
+        +0x00 i32 N (num units, 1..max_units)   +0x04 i32 W (=128)  +0x08 i32 H (=128)
+        +0x0c u32 flags  bit0 = forced action present
+        +0x10 i64[4] forced action {a, arg, pos, u} (used only when bit0; engine scores it instead of sampling)
+       validation: N<1 || N>max_units || W!=128 || H!=128 -> "bad request header (N=%d W=%d H=%d)", exit 1.
+ 0x00100  i64[N][6]        unit ids/indices (0x30 B/unit; region 0xC000 = 1024 units)
+ 0x0C100  f32[N][109]      unit continuous features (0x1b4 B/unit; region 0x6D000)
+ 0x79100  u8[N]            per-unit byte array A (region 0x400)
+ 0x79500  u8[N]            per-unit byte array B (region 0x400)
+ 0x79900  u8[20]           (region 0x40)
+ 0x79940  u8[233]          (region 0x100)
+ 0x79A40  f32[292]         global features (0x490 B; region 0x4C0)
+ 0x79F00  u16[128*128]     spatial map (0x8000)
+ 0x81F00  u8[128*128]      spatial map (0x4000)
+ 0x85F00  i64[4]           (0x20; region 0x40)
+ 0x85F40  response 0x28 B:
+        +0x00 i64 a (action type)  +0x08 i64 arg  +0x10 i64 pos (flat; x = pos%256, y = pos/256 in engine)
+        +0x18 i64 u (unit index)   +0x20 f32 win (win prob)  +0x24 f32 lp (log-prob of chosen action)
+ 0x85F68..0x85F80 unused.
+ Semantic labels of arrays beyond sizes = I (see DLL side).
+
+WAIT LOOP (0x140151f3e..)
+V loop: if quit(+0x14) -> exit; if +0x40 != last -> serve; else WaitForMultipleObjects(2, {req_ev, parent_handle},
+  FALSE, INFINITE). ret 0 -> re-check; ret 1 -> "parent process exited"; other -> "shm wait failed";
+  both then "[pluto_infer] shutdown after %ld steps; exiting", exit 0.
+V serve: last = +0x40; copy 0x30 header from +0xc0; memcpy payload arrays from shm (no bounds beyond N check);
+  run step FUN_140034f10(out, model, inputs, forced_or_NULL); write response to +0x85f40 (10 dwords), +0x80 = last,
+  SetEvent(resp_ev). Then FUN_14002b8d0(model) = next-step prelude work (I: latency hiding, "prelude" in bench).
+V --verbose: "[pluto_infer] step %ld N=%d a=%d arg=%d pos=%lld u=%d lp=%.3f win=%.3f".
+
+PIPE TRANSPORT (BWRL_SHM=0 or attach failure)
+V stdin/stdout set to _O_BINARY. Request = fread 0x30 header (short read/EOF -> "shutdown after %ld steps", exit 0),
+  then same arrays contiguous, no padding: N*0x30, N*0x1b4, N, N, 20, 233, 292*4, 0x8000, 0x4000, 0x20.
+  Any short read -> "truncated request payload", exit 1. Response = 0x28 bytes on stdout + fflush; failure ->
+  "response write failed", exit 1.
+
+EXIT CODES: 0 clean shutdown (quit flag / parent exit / wait fail / stdin EOF); 1 fatal (no AVX2, init failure,
+ max_units cap, handshake write, bad header, truncated payload, response write); 2 usage (unknown arg/backend, --log fail).
+Logging: everything to stderr (= pluto_infer.log from DLL); stderr set unbuffered (setvbuf mode 4).

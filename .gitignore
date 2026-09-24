@@ -1,0 +1,7 @@
+# Third-party binaries and derived dumps are not redistributed; scripts/reproduce.sh regenerates them.
+*.zip
+release/
+decomp/
+gproj/
+ref/
+__pycache__/
