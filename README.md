@@ -81,7 +81,21 @@ Claims are tagged **[V]** (verified from code, bytes or shapes), **[I]**
 ## Running Pluto
 
 It needs Brood War **1.16.1** + BWAPI 4.4.0 (Windows or Wine) and an AVX2
-CPU. It cannot play on today's Battle.net, which is StarCraft: Remastered;
+CPU. On Windows, [`windows/install-pluto.ps1`](windows/install-pluto.ps1)
+does the setup. It checks that `StarCraft.exe` is 1.16.1 and the CPU has
+AVX2, downloads BWAPI 4.4.0 and the Pluto release (both sha256-checked),
+installs them, points `bwapi.ini` at `pluto.dll`, and adds a Chaoslauncher
+shortcut:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install-pluto.ps1 -StarCraftDir "C:\Games\Starcraft" -Race Zerg -EnemyRace Protoss -AutoStart -Windowed
+```
+
+`-AutoStart` starts a game against the built-in AI by itself. `-Bench`
+times inference threads once. Then run the shortcut, tick *BWAPI 4.4.0
+Injector [RELEASE]* and press Start. The script has only been
+syntax-checked (pwsh parser, plus the `bwapi.ini` edits run against the real
+4.4.0 file); it has not been run on a Windows machine yet. It cannot play on today's Battle.net, which is StarCraft: Remastered;
 BWAPI does not support Remastered, and running bots on the ladder breaks
 Blizzard's terms. Play it locally against the built-in AI or other bots,
 over LAN, or through a bot tournament manager.
