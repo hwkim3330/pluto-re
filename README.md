@@ -95,7 +95,9 @@ powershell -ExecutionPolicy Bypass -File install-pluto.ps1 -StarCraftDir "C:\Gam
 times inference threads once. Then run the shortcut, tick *BWAPI 4.4.0
 Injector [RELEASE]* and press Start. The script has only been
 syntax-checked (pwsh parser, plus the `bwapi.ini` edits run against the real
-4.4.0 file); it has not been run on a Windows machine yet. It cannot play on today's Battle.net, which is StarCraft: Remastered;
+4.4.0 file); it has not been run on a Windows machine yet.
+
+Pluto cannot play on today's Battle.net, which is StarCraft: Remastered;
 BWAPI does not support Remastered, and running bots on the ladder breaks
 Blizzard's terms. Play it locally against the built-in AI or other bots,
 over LAN, or through a bot tournament manager.
