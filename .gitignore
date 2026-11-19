@@ -5,3 +5,7 @@ decomp/
 gproj/
 ref/
 __pycache__/
+v2/release/
+v2/gproj/
+v2/decomp/
+v2/*.zip

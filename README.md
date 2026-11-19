@@ -12,6 +12,10 @@ repo. `scripts/reproduce.sh` downloads the release (sha256-checked), fetches
 the BWAPI 4.4.0 headers, runs Ghidra headless and rebuilds the annotated
 decompilation.
 
+> **v2.0 (2026-10-15)** — new model `md09b_1331000`, 342 M parameters. Same body; the attention-GRU core doubled its
+> heads and width, gained QK-norm and twice the long-term memory slots, and the opening table now ships inside the
+> weights (24/23/22 arms with prior win rates). Details: [docs/v2.0.md](docs/v2.0.md).
+
 ## Short answers
 
 **Does it play by looking at the screen?** No. `pluto.dll` reads StarCraft
